@@ -1,0 +1,30 @@
+services:
+  # 常驻服务：前端看板（http://localhost:8765/dashboard.html）
+  frontend:
+    build: .
+    image: mom-index:latest
+    container_name: mom-index-frontend
+    working_dir: /app/frontend
+    ports:
+      - "8765:8765"
+    volumes:
+      - mom_data:/app/frontend/data
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    command: ["python", "server.py", "8765"]
+
+  # 一次性任务：执行 采集 → 分析 → 指数 → 存储，写入共享数据卷
+  pipeline:
+    image: mom-index:latest
+    container_name: mom-index-pipeline
+    volumes:
+      - mom_data:/app/data
+    env_file:
+      - path: .env
+        required: false
+    command: ["python", "pipeline.py"]
+
+volumes:
+  mom_data:

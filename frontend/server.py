@@ -4,7 +4,8 @@ import os
 from urllib.parse import unquote, urlsplit
 
 FRONTEND_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(os.path.dirname(FRONTEND_DIR), "data")
+# 数据从 frontend/data 读取（pipeline 每次运行后会把 data/ 同步到此目录）
+DATA_DIR = os.path.join(FRONTEND_DIR, "data")
 PUBLIC_DATA_FILES = {"dashboard_data.json", "history.json", "xhs_posts.json"}
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
