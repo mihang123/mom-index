@@ -211,4 +211,5 @@ def get_dashboard_data() -> Dict:
         "latest": latest,
         "sector_history": sector_history,
         "record_count": len(records),
+        "data_notice": "脱敏合成演示数据，不对应真实用户、账户或生产策略。",
     }

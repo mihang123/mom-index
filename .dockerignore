@@ -1,0 +1,24 @@
+# Version control & IDE
+.git
+.idea
+.vscode
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 环境与凭据（不得进入镜像）
+.env
+.env.*
+!.env.example
+cookies*.json
+data/*_auth.json
+data/*_profile/
+data/*_debug.*
+data/raw_*.json
+
+# Playwright 本地 profile
+*.pw_profile/
