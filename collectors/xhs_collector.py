@@ -7,11 +7,12 @@ import requests
 from datetime import datetime
 from typing import List, Dict, Optional
 
+from .proxy_config import get_proxies
+
 # 配置: 在 https://rnote.dev/auth/register 注册后获取
 # 设置环境变量 RNODE_API_KEY 或直接填入
 API_KEY = os.environ.get("RNODE_API_KEY", "")
 API_BASE = "https://rnote.dev/api/v2"
-PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
 
 SEARCH_KEYWORDS = {
     # 用小白的语言去搜，才能找到小白
@@ -32,7 +33,7 @@ def search_notes(keyword: str, count: int = 20) -> List[Dict]:
             f"{API_BASE}/crawler/search/notes",
             params={"keyword": keyword, "count": count, "sort": "general"},
             headers={"X-API-Key": API_KEY, "User-Agent": "mom-index/1.0"},
-            proxies=PROXY,
+            proxies=get_proxies(),
             timeout=15,
         )
         if resp.status_code == 200:
@@ -62,7 +63,7 @@ def get_note_detail(note_id: str) -> Optional[Dict]:
             f"{API_BASE}/crawler/note/image",
             params={"note_id": note_id},
             headers={"X-API-Key": API_KEY},
-            proxies=PROXY,
+            proxies=get_proxies(),
             timeout=15,
         )
         if resp.status_code == 200:
