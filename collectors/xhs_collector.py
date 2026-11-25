@@ -6,12 +6,14 @@ import os
 import requests
 from datetime import datetime
 from typing import List, Dict, Optional
+import time
+
+from .proxy_config import get_proxies
 
 # 配置: 在 https://rnote.dev/auth/register 注册后获取
 # 设置环境变量 RNODE_API_KEY 或直接填入
 API_KEY = os.environ.get("RNODE_API_KEY", "")
 API_BASE = "https://rnote.dev/api/v2"
-PROXY = {"http": "http://127.0.0.1:7890", "https": "http://127.0.0.1:7890"}
 
 SEARCH_KEYWORDS = {
     # 用小白的语言去搜，才能找到小白
@@ -21,37 +23,113 @@ SEARCH_KEYWORDS = {
     "semiconductor": ["芯片还能买吗", "半导体新手", "芯片ETF"],
 }
 
-def search_notes(keyword: str, count: int = 20) -> List[Dict]:
-    """搜索小红书笔记"""
+# 排序方式：general 综合 / time_descending 最新 / popularity_descending 最多点赞
+SORT_TYPE = "general"
+
+
+class _Budget:
+    """请求预算控制 —— 按次计费接口必须防止翻页逻辑意外超支。"""
+
+    def __init__(self, used: int = 0, limit: int = 20):
+        self.used = used
+        self.limit = limit
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def allow(self) -> bool:
+        return self.remaining > 0
+
+
+def search_notes(keyword: str, count: int = 20, sort_type: str = SORT_TYPE,
+                 budget: Optional["_Budget"] = None) -> List[Dict]:
+    """搜索小红书笔记。
+
+    参数说明（对照 rnote.dev 线上 OpenAPI 核实）：
+      - keyword  必填，搜索词
+      - page     页码，从 1 开始（不是 count，上游旧代码用的是 count，会被服务端静默忽略）
+      - sort_type 排序，取值 general / time_descending / popularity_descending /
+                   comment_descending / collect_descending
+      - note_type / time_filter 为中文枚举，如 "视频笔记" / "一周内"
+
+    翻页时必须把首次响应中的 search_id 与 search_session_id 原样带回，
+    否则会重复取到第一页。
+
+    budget: 可选的请求预算，传入后翻页会受其上限约束。
+    """
     if not API_KEY:
         print(f"  ⚠️ 未配置 RNODE_API_KEY，跳过小红书搜索: {keyword}")
         return []
-    
-    try:
-        resp = requests.get(
-            f"{API_BASE}/crawler/search/notes",
-            params={"keyword": keyword, "count": count, "sort": "general"},
-            headers={"X-API-Key": API_KEY, "User-Agent": "mom-index/1.0"},
-            proxies=PROXY,
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            # rnote.dev 响应结构: data.data.data.items[].note
-            inner = data.get("data", {}).get("data", {})
-            items = inner.get("items", [])
-            notes = []
-            for item in items:
-                note = item.get("note") or item.get("note_card") or item
-                if note and isinstance(note, dict):
-                    notes.append(_parse_note(note))
-            return notes
-        else:
-            print(f"  XHS API错误: {resp.status_code} {resp.text[:100]}")
-            return []
-    except Exception as e:
-        print(f"  XHS 请求失败: {e}")
-        return []
+
+    notes: List[Dict] = []
+    page = 1
+    search_id = ""
+    search_session_id = ""
+
+    while len(notes) < count and page <= 5:
+        if budget is not None and not budget.allow():
+            print(f"  ⚠️ 达到请求预算上限，停止翻页")
+            break
+
+        params = {
+            "keyword": keyword,
+            "page": page,
+            "sort_type": sort_type,
+        }
+        if search_id:
+            params["search_id"] = search_id
+        if search_session_id:
+            params["search_session_id"] = search_session_id
+
+        try:
+            resp = requests.get(
+                f"{API_BASE}/crawler/search/notes",
+                params=params,
+                headers={"X-API-Key": API_KEY, "User-Agent": "mom-index/1.0"},
+                proxies=get_proxies(),
+                timeout=20,
+            )
+        except Exception as e:
+            print(f"  XHS 请求失败: {e}")
+            break
+
+        if budget is not None:
+            budget.used += 1
+
+        if resp.status_code != 200:
+            print(f"  XHS API错误: {resp.status_code} {resp.text[:150]}")
+            break
+
+        body = resp.json()
+        # 统一响应结构: {"success": bool, "data": {...}, "error": str|null}
+        if not body.get("success"):
+            print(f"  XHS 业务失败: {body.get('error')}")
+            break
+
+        data = body.get("data") or {}
+        # 搜索结果路径: data.data.items
+        inner = data.get("data") or {}
+        items = inner.get("items") or []
+        # 翻页三件套：仅首次搜索返回
+        search_id = data.get("search_id") or search_id
+        search_session_id = data.get("search_session_id") or search_session_id
+
+        for item in items:
+            note = item.get("note") or item.get("note_card") or item
+            if note and isinstance(note, dict):
+                parsed = _parse_note(note)
+                if parsed:
+                    notes.append(parsed)
+
+        if not items:
+            break
+        page += 1
+        if not search_id and not search_session_id:
+            # 拿不到翻页凭据，继续翻会重复第一页
+            break
+
+    return notes[:count]
 
 def get_note_detail(note_id: str) -> Optional[Dict]:
     """获取笔记详情（含评论）"""
@@ -62,7 +140,7 @@ def get_note_detail(note_id: str) -> Optional[Dict]:
             f"{API_BASE}/crawler/note/image",
             params={"note_id": note_id},
             headers={"X-API-Key": API_KEY},
-            proxies=PROXY,
+            proxies=get_proxies(),
             timeout=15,
         )
         if resp.status_code == 200:
@@ -71,18 +149,33 @@ def get_note_detail(note_id: str) -> Optional[Dict]:
         pass
     return None
 
-def _parse_note(raw: Dict) -> Dict:
-    """标准化笔记格式 — 适配 rnote.dev API 返回结构"""
+def _parse_note(raw: Dict) -> Optional[Dict]:
+    """标准化笔记格式 — 适配 rnote.dev API 返回结构。
+
+    搜索结果里可能混有非笔记卡片（推荐模块、话题模块等），
+    这里统一做一次有效性校验，没有标题的条目直接丢弃。
+    """
     user = raw.get("user") or raw.get("author") or {}
     interact = raw.get("interact_info") or raw.get("note_interact_info") or {}
     tags = raw.get("tag_list") or raw.get("tags") or []
-    
+
+    # 搜索卡片里标题可能在 display_title，详情接口里在 title/desc
+    title = (raw.get("display_title") or raw.get("title")
+             or raw.get("desc") or "").strip()
+
+    note_id = raw.get("id") or raw.get("note_id") or raw.get("noteId") or ""
+    if not title or not note_id:
+        return None
+
+    if not isinstance(user, dict):
+        user = {}
+
     return {
-        "id": raw.get("id") or raw.get("note_id", ""),
-        "title": (raw.get("title") or raw.get("desc") or "")[:100],
+        "id": note_id,
+        "title": title[:100],
         "content": raw.get("desc") or raw.get("content") or "",
         "platform": "xiaohongshu",
-        "author": user.get("nickname") or user.get("nick_name", "未知"),
+        "author": user.get("nickname") or user.get("nick_name") or "未知",
         "author_followers": user.get("follower_count", 0),
         "likes": interact.get("liked_count", 0),
         "comments_count": interact.get("comment_count", 0),
@@ -183,15 +276,29 @@ def _gen_sample_posts() -> Dict[str, List[Dict]]:
     return result
 
 
-def collect_all() -> Dict[str, List[Dict]]:
-    """采集所有板块的小红书数据。API不可用时使用模拟数据。"""
+def collect_all(max_requests: int = 20) -> Dict[str, List[Dict]]:
+    """采集所有板块的小红书数据。API不可用时使用模拟数据。
+
+    max_requests: 本次最多发起的 API 请求数（按次计费，免费测试 Key 每日仅 100 次，
+    因此需要一个硬上限，避免翻页逻辑意外超支）。
+    """
     if API_KEY:
         result = {}
+        budget = _Budget(used=0, limit=max_requests)
         for sector_key, keywords in SEARCH_KEYWORDS.items():
+            if not budget.allow():
+                print(f"  ⚠️ 已达请求上限 {max_requests}，跳过剩余板块")
+                break
             all_notes = []
             for kw in keywords:
-                notes = search_notes(kw, count=5)
+                if not budget.allow():
+                    print(f"  ⚠️ 已达请求上限 {max_requests}，停止采集")
+                    break
+                # 每个关键词取 10 条
+                notes = search_notes(kw, count=10, budget=budget)
                 all_notes.extend(notes)
+                time.sleep(0.3)  # 轻微限速，避免触发 429
+            # 按 id 去重
             seen = set()
             unique = []
             for n in all_notes:
@@ -200,13 +307,15 @@ def collect_all() -> Dict[str, List[Dict]]:
                     unique.append(n)
             result[sector_key] = unique
             print(f"  [小红书-{sector_key}] 采集到 {len(unique)} 条")
+        print(f"  [小红书] 本次共发起 {budget.used} 次 API 请求")
         return result
     else:
-        print("  ⚠️ 无 API Key，使用模拟小红书数据（26条）")
+        print("  ⚠️ 无 API Key，使用模拟小红书数据")
         sample = _gen_sample_posts()
         for sector, posts in sample.items():
             print(f"  [小红书-模拟-{sector}] {len(posts)} 条")
         return sample
+
 
 if __name__ == "__main__":
     if not API_KEY:
