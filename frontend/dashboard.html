@@ -325,7 +325,7 @@ function renderTopPosts(data) {
   const container = document.getElementById('top-posts');
   const latest = data.latest;
   if (!latest) {
-    container.innerHTML += '<div class="loading">暂无数据</div>';
+    container.innerHTML = '<div class="loading">暂无数据</div>';
     return;
   }
 
@@ -342,14 +342,15 @@ function renderTopPosts(data) {
   allTop = allTop.slice(0, 8);
 
   if (!allTop.length) {
-    container.innerHTML += '<div class="loading">今日暂无样本文本示例</div>';
+    container.innerHTML = '<div class="loading">今日暂无样本文本示例</div>';
     return;
   }
 
   const badgeClass = score => score >= 50 ? 'pure' : 'semi';
   const badgeText = score => score >= 50 ? '高匹配文本' : '一般匹配文本';
 
-  container.innerHTML += allTop.map(p => `
+  // 用 = 覆盖而非 += 追加，否则初始的「加载中...」占位符会永久残留在页面上
+  container.innerHTML = allTop.map(p => `
   <div class="post-item">
     <div class="post-title">
       <span class="post-badge ${badgeClass(p.score)}">${badgeText(p.score)} ${p.score}分</span>
