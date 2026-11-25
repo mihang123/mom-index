@@ -27,7 +27,23 @@ SEARCH_KEYWORDS = {
 SORT_TYPE = "general"
 
 
-def search_notes(keyword: str, count: int = 20, sort_type: str = SORT_TYPE) -> List[Dict]:
+class _Budget:
+    """请求预算控制 —— 按次计费接口必须防止翻页逻辑意外超支。"""
+
+    def __init__(self, used: int = 0, limit: int = 20):
+        self.used = used
+        self.limit = limit
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def allow(self) -> bool:
+        return self.remaining > 0
+
+
+def search_notes(keyword: str, count: int = 20, sort_type: str = SORT_TYPE,
+                 budget: Optional["_Budget"] = None) -> List[Dict]:
     """搜索小红书笔记。
 
     参数说明（对照 rnote.dev 线上 OpenAPI 核实）：
@@ -39,6 +55,8 @@ def search_notes(keyword: str, count: int = 20, sort_type: str = SORT_TYPE) -> L
 
     翻页时必须把首次响应中的 search_id 与 search_session_id 原样带回，
     否则会重复取到第一页。
+
+    budget: 可选的请求预算，传入后翻页会受其上限约束。
     """
     if not API_KEY:
         print(f"  ⚠️ 未配置 RNODE_API_KEY，跳过小红书搜索: {keyword}")
@@ -50,6 +68,10 @@ def search_notes(keyword: str, count: int = 20, sort_type: str = SORT_TYPE) -> L
     search_session_id = ""
 
     while len(notes) < count and page <= 5:
+        if budget is not None and not budget.allow():
+            print(f"  ⚠️ 达到请求预算上限，停止翻页")
+            break
+
         params = {
             "keyword": keyword,
             "page": page,
@@ -71,6 +93,9 @@ def search_notes(keyword: str, count: int = 20, sort_type: str = SORT_TYPE) -> L
         except Exception as e:
             print(f"  XHS 请求失败: {e}")
             break
+
+        if budget is not None:
+            budget.used += 1
 
         if resp.status_code != 200:
             print(f"  XHS API错误: {resp.status_code} {resp.text[:150]}")
@@ -251,15 +276,26 @@ def _gen_sample_posts() -> Dict[str, List[Dict]]:
     return result
 
 
-def collect_all() -> Dict[str, List[Dict]]:
-    """采集所有板块的小红书数据。API不可用时使用模拟数据。"""
+def collect_all(max_requests: int = 20) -> Dict[str, List[Dict]]:
+    """采集所有板块的小红书数据。API不可用时使用模拟数据。
+
+    max_requests: 本次最多发起的 API 请求数（按次计费，免费测试 Key 每日仅 100 次，
+    因此需要一个硬上限，避免翻页逻辑意外超支）。
+    """
     if API_KEY:
         result = {}
+        budget = _Budget(used=0, limit=max_requests)
         for sector_key, keywords in SEARCH_KEYWORDS.items():
+            if not budget.allow():
+                print(f"  ⚠️ 已达请求上限 {max_requests}，跳过剩余板块")
+                break
             all_notes = []
             for kw in keywords:
-                # 每个关键词取 10 条，4 个关键词约 40 条/板块
-                notes = search_notes(kw, count=10)
+                if not budget.allow():
+                    print(f"  ⚠️ 已达请求上限 {max_requests}，停止采集")
+                    break
+                # 每个关键词取 10 条
+                notes = search_notes(kw, count=10, budget=budget)
                 all_notes.extend(notes)
                 time.sleep(0.3)  # 轻微限速，避免触发 429
             # 按 id 去重
@@ -271,6 +307,7 @@ def collect_all() -> Dict[str, List[Dict]]:
                     unique.append(n)
             result[sector_key] = unique
             print(f"  [小红书-{sector_key}] 采集到 {len(unique)} 条")
+        print(f"  [小红书] 本次共发起 {budget.used} 次 API 请求")
         return result
     else:
         print("  ⚠️ 无 API Key，使用模拟小红书数据")
@@ -278,6 +315,7 @@ def collect_all() -> Dict[str, List[Dict]]:
         for sector, posts in sample.items():
             print(f"  [小红书-模拟-{sector}] {len(posts)} 条")
         return sample
+
 
 if __name__ == "__main__":
     if not API_KEY:

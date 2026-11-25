@@ -119,6 +119,19 @@ class XhsCollectorTests(unittest.TestCase):
         # 非笔记卡片没有 note_card、没有 id，应被过滤
         self.assertTrue(all(x["id"].startswith("note_") for x in notes))
 
+    def test_budget_limits_number_of_requests(self):
+        """预算上限必须真的拦住翻页 —— 免费测试 Key 每日仅 100 次，不能超支。"""
+        budget = self.xc._Budget(used=0, limit=2)
+        notes = self.xc.search_notes("黄金怎么买", count=20, budget=budget)
+        self.assertLessEqual(budget.used, 2, "实际请求数不应超过预算上限")
+        self.assertGreaterEqual(budget.used, 1)
+        self.assertEqual(len(RECEIVED), budget.used)
+
+    def test_collect_all_respects_max_requests(self):
+        """collect_all 的 max_requests 是硬上限。"""
+        self.xc.collect_all(max_requests=3)
+        self.assertLessEqual(len(RECEIVED), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
