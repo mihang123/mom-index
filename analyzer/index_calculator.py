@@ -16,6 +16,12 @@ SECTOR_NAMES = {
     "semiconductor": "半导体",
 }
 
+# 随输出一同分发的数据性质声明（公开版为脱敏合成数据）
+DATA_NOTICE = (
+    "公开仓库仅提供脱敏合成数据与 v0.1 规则框架，不代表维护者私有版本的"
+    "真实指数值，也不构成任何投资建议。"
+)
+
 
 def compute_sector_index(analysis_results: List) -> Dict:
     """
@@ -187,10 +193,10 @@ def get_dashboard_data() -> Dict:
     """获取前端所需的完整数据"""
     history = load_history()
     records = history.get("records", [])
-    
+
     # 最新一条
     latest = records[-1] if records else None
-    
+
     # 为每个板块准备历史曲线数据
     sector_history = {
         "nasdaq": [],
@@ -198,7 +204,7 @@ def get_dashboard_data() -> Dict:
         "cpo": [],
         "semiconductor": [],
     }
-    
+
     for r in records:
         for sector, data in r.get("sectors", {}).items():
             if sector in sector_history:
@@ -206,9 +212,12 @@ def get_dashboard_data() -> Dict:
                     "date": r["date"],
                     "index": data["index"],
                 })
-    
+
     return {
         "latest": latest,
         "sector_history": sector_history,
         "record_count": len(records),
+        # 数据性质声明 — 公开版仅含脱敏合成样本，必须随每次输出一起带出，
+        # 否则 pipeline 覆盖 dashboard_data.json 后前端与测试会丢失该提示。
+        "data_notice": DATA_NOTICE,
     }
